@@ -3,10 +3,8 @@ package postgres
 import (
 	"context"
 	"database/sql"
-	"dispatch-go/internal/kafka"
 	"dispatch-go/internal/outbox"
 	"fmt"
-	"log"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -90,12 +88,31 @@ func ListPendingOutbox(ctx context.Context, db *sql.DB, limit int) ([]outbox.Row
 		return nil, fmt.Errorf("iterate pending outbox rows: %w", err)
 	}
 
-	producer, err := kafka.NewProducer(cfg.KafkaBootstrapServers)
-	if err != nil {
-		log.Fatalf("failed to create kafka producer: %v", err)
-	}
-	defer producer.Close()
-
 	return result, nil
 
+}
+
+func MarkOutboxProcessed(ctx context.Context, db *sql.DB, id string) error {
+	const query = `
+		UPDATE order_outbox
+		SET processed_at = NOW()
+		WHERE id = $1
+		  AND processed_at IS NULL
+	`
+
+	result, err := db.ExecContext(ctx, query, id)
+	if err != nil {
+		return fmt.Errorf("mark outbox row processed: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read rows affected for outbox update: %w", err)
+	}
+
+	if rowsAffected != 1 {
+		return fmt.Errorf("expected to update 1 outbox row, updated %d", rowsAffected)
+	}
+
+	return nil
 }

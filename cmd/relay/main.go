@@ -4,9 +4,12 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"time"
+	"os/signal"
+	"syscall"
 
+	"dispatch-go/internal/app"
 	"dispatch-go/internal/config"
+	"dispatch-go/internal/kafka"
 	"dispatch-go/internal/postgres"
 )
 
@@ -26,27 +29,30 @@ func main() {
 		log.Fatalf("failed to reach postgres: %v", err)
 	}
 
+	producer, err := kafka.NewProducer(cfg.KafkaBootstrapServers)
+	if err != nil {
+		log.Fatalf("failed to create kafka producer: %v", err)
+	}
+	defer producer.Close()
+
 	pendingCount, err := postgres.CountPendingOutbox(context.Background(), db)
 	if err != nil {
 		log.Fatalf("failed to count pending outbox rows: %v", err)
 	}
 
-	fmt.Printf("pending outbox rows: %d\n", pendingCount)
+	fmt.Printf("dispatch-go relay starting\n")
+	fmt.Printf("pending outbox rows at startup: %d\n", pendingCount)
+	fmt.Printf("kafka bootstrap servers: %s\n", cfg.KafkaBootstrapServers)
+	fmt.Printf("kafka topic: %s\n", cfg.KafkaTopic)
+	fmt.Printf("poll interval: %s\n", cfg.PollInterval)
+	fmt.Printf("batch size: %d\n", cfg.BatchSize)
 
-	pendingRows, err := postgres.ListPendingOutbox(context.Background(), db, 10)
-	if err != nil {
-		log.Fatalf("failed to list pending outbox rows: %v", err)
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	if err := app.Run(ctx, cfg, db, producer); err != nil {
+		log.Fatalf("relay stopped with error: %v", err)
 	}
 
-	fmt.Printf("loaded %d pending outbox rows\n", len(pendingRows))
-
-	for _, row := range pendingRows {
-		fmt.Printf("outbox row id=%s aggregate_id=%s event_type=%s created_at=%s\n",
-			row.ID,
-			row.AggregateID,
-			row.EventType,
-			row.CreatedAt.Format(time.RFC3339),
-		)
-		fmt.Printf("payload: %s\n", string(row.Payload))
-	}
+	log.Printf("relay stopped")
 }
