@@ -13,7 +13,7 @@ Its job is to:
 
 The current event flow is:
 
-1. `dispatch` writes an order and an outbox row
+1. `dispatch-rs` writes an order and an outbox row
 2. `dispatch-go` reads the outbox row and publishes `order.created`
 3. `dispatch-kt` consumes that event and writes a dispatch job
 
@@ -82,7 +82,7 @@ The relay logs startup, batch processing, publish failures, and successful proce
 
 ## How To See It Working
 
-1. Start `dispatch` and `dispatch-kt`.
+1. Start `dispatch-rs` and `dispatch-kt`.
 2. Start this relay.
 3. Create a new order through the Rust API with a fresh `Idempotency-Key`.
 4. Watch the relay log a processed outbox row.
