@@ -1,62 +1,90 @@
 # dispatch-go
 
-`dispatch-go` will be the relay service that sits between the Rust API and the Kotlin consumer.
+`dispatch-go` is the relay service between the Rust order API and the Kafka topic consumed by `dispatch-kt`.
 
-Its job is:
+Its job is to:
 
-1. read unprocessed rows from `order_outbox`
-2. publish those events to Kafka
-3. mark the outbox rows as processed
+1. poll `order_outbox` for rows where `processed_at IS NULL`
+2. publish the stored event payload to Kafka
+3. mark the outbox row as processed
+4. repeat until stopped
 
-## Why Go
+## Role In The System
 
-Go is a good fit for this service because it is simple to package, easy to run in Docker and Kubernetes, and well suited to long-running worker-style processes.
+The current event flow is:
 
-## Planned Flow
+1. `dispatch` writes an order and an outbox row
+2. `dispatch-go` reads the outbox row and publishes `order.created`
+3. `dispatch-kt` consumes that event and writes a dispatch job
 
-The expected loop for this service is:
+This keeps the Rust API responsible for transactional persistence while the relay handles asynchronous publication.
 
-1. connect to Postgres
-2. connect to Kafka
-3. poll `order_outbox` for rows where `processed_at IS NULL`
-4. publish the stored event payload to the `orders.created` topic
-5. update `processed_at`
-6. repeat
+## Configuration
 
-## Suggested Package Layout
+Required environment variables:
 
-This project is intentionally empty for now, but the directory shape is ready for a typical Go service:
+- `DATABASE_URL`
+- `KAFKA_BOOTSTRAP_SERVERS`
+- `KAFKA_TOPIC`
 
-- `cmd/relay`
-  The main entrypoint for the service
-- `internal/app`
-  App wiring and startup
-- `internal/config`
-  Environment/config loading
-- `internal/outbox`
-  Polling and row-processing logic
-- `internal/postgres`
-  Database access helpers
-- `internal/kafka`
-  Kafka producer wrapper
+Optional environment variables:
 
-## Suggested First Steps
+- `POLL_INTERVAL`
+  Default: `2s`
+- `BATCH_SIZE`
+  Default: `10`
 
-When you start implementing:
+## Local Run
 
-1. define config loading from env
-2. add a Postgres connection
-3. add an outbox row model
-4. add a query for unprocessed rows
-5. add a Kafka producer
-6. add a loop that publishes and marks rows processed
-7. add graceful shutdown and logging
-
-## Local Project Commands
-
-Once code exists, a typical workflow will probably be:
+From the parent workspace, bring up shared infrastructure first:
 
 ```bash
-go test ./...
+cd ..
+make local-setup
+```
+
+Then run the relay from this repo:
+
+```bash
+DATABASE_URL=postgres://dispatch:dispatch@localhost:5432/dispatch \
+KAFKA_BOOTSTRAP_SERVERS=localhost:9092 \
+KAFKA_TOPIC=orders.created \
 go run ./cmd/relay
 ```
+
+For faster local feedback:
+
+```bash
+DATABASE_URL=postgres://dispatch:dispatch@localhost:5432/dispatch \
+KAFKA_BOOTSTRAP_SERVERS=localhost:9092 \
+KAFKA_TOPIC=orders.created \
+POLL_INTERVAL=1s \
+BATCH_SIZE=5 \
+go run ./cmd/relay
+```
+
+The relay logs startup, batch processing, publish failures, and successful processed rows. It shuts down cleanly on `Ctrl-C`.
+
+## Development Layout
+
+- `cmd/relay`
+  Service entrypoint
+- `internal/app`
+  Polling loop and batch processing
+- `internal/config`
+  Environment loading and validation
+- `internal/postgres`
+  Outbox queries and processed-row updates
+- `internal/kafka`
+  Kafka producer wrapper
+- `internal/outbox`
+  Outbox row model
+
+## How To See It Working
+
+1. Start `dispatch` and `dispatch-kt`.
+2. Start this relay.
+3. Create a new order through the Rust API with a fresh `Idempotency-Key`.
+4. Watch the relay log a processed outbox row.
+
+If you send the same request with the same idempotency key, the Rust service will reuse the existing order and no new outbox row will appear for the relay to publish.
