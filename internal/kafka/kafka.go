@@ -6,6 +6,10 @@ import (
 	ckafka "github.com/confluentinc/confluent-kafka-go/v2/kafka"
 )
 
+type producer interface {
+	Produce(msg *ckafka.Message, deliveryChan chan ckafka.Event) error
+}
+
 func NewProducer(bootstrapServers string) (*ckafka.Producer, error) {
 	producer, err := ckafka.NewProducer(&ckafka.ConfigMap{
 		"bootstrap.servers": bootstrapServers,
@@ -19,7 +23,7 @@ func NewProducer(bootstrapServers string) (*ckafka.Producer, error) {
 	return producer, nil
 }
 
-func Publish(producer *ckafka.Producer, topic string, payload []byte) error {
+func Publish(producer producer, topic string, payload []byte) error {
 	deliveryChan := make(chan ckafka.Event, 1)
 	defer close(deliveryChan)
 
